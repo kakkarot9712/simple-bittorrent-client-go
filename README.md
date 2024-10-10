@@ -1,4 +1,4 @@
-[![progress-banner](https://backend.codecrafters.io/progress/bittorrent/647733f5-5930-4b30-b15f-2dd6db48a907)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
+[![progress-banner](https://backend.codecrafters.io/progress/bittorrent/b6a1bab3-82f4-48cd-a353-3b102731b243)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
 
 This is a starting point for Go solutions to the
 ["Build Your Own BitTorrent" Challenge](https://app.codecrafters.io/courses/bittorrent/overview).
@@ -18,7 +18,8 @@ The entry point for your BitTorrent implementation is in
 changes to pass the first stage:
 
 ```sh
-git commit -am "pass 1st stage" # any msg
+git add .
+git commit -m "pass 1st stage" # any msg
 git push origin master
 ```
 

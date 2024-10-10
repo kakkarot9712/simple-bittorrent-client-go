@@ -30,6 +30,22 @@ type torrent struct {
 	} `bencode:"info"`
 }
 
+type message uint8
+
+const (
+	Choke message = iota
+	Unchoke
+	Interested
+	NotInterested
+	Have
+	Bitfields
+	Request
+	Piece
+	Cancel
+)
+
+const PIECE_SIZE uint32 = 16 * 1024
+
 // Example:
 // - 5:hello -> hello
 // - 10:hello12345 -> hello12345
