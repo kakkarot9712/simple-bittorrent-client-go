@@ -44,7 +44,7 @@ const (
 	Cancel
 )
 
-const PIECE_SIZE uint32 = 16 * 1024
+const BLOCK_SIZE uint32 = 16 * 1024
 
 // Example:
 // - 5:hello -> hello

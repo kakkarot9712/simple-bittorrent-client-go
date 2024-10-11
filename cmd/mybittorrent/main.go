@@ -4,12 +4,16 @@ import (
 	// Uncomment this line to pass the first stage
 	// "encoding/json"
 
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"strconv"
+
+	"github.com/jessevdk/go-flags"
 	// Available if you need it!
 )
 
@@ -63,20 +67,35 @@ func main() {
 		fmt.Println("Peer ID:", pid)
 		conn.Close()
 	} else if command == "download_piece" {
-		// outFolder := os.Args[3]
-		file := os.Args[4]
+		type Options struct {
+			Output string `short:"o" long:"o" description:"Output of a piece"`
+		}
+		options := Options{}
+		args, err := flags.Parse(&options)
+		if err != nil {
+			panic(err)
+		}
+		outFolder := options.Output
+		file := args[1]
+		piceIndex, err := strconv.ParseUint(args[2], 10, 32)
+		if err != nil {
+			panic(err)
+		}
 		client := Client{TorrentFile: file}
 		client.Initialize()
 		client.GetPeersFromAnnounceServer()
+		fmt.Println(client.Torrent.Info.PieceLength, "PL")
 		// pieceIndex := os.Args[5]
 		client.ConnectToPeer()
 		conn := client.conn
 		defer conn.Close()
-		_, err := conn.Write([]byte{0, 0, 0, 1, byte(Interested)})
+		_, err = conn.Write([]byte{0, 0, 0, 1, byte(Interested)})
 		if err != nil {
 			panic(err)
 		}
 		buff := make([]byte, 512)
+		var piece bytes.Buffer
+		piecesReceving := false
 		for {
 			size, err := conn.Read(buff)
 			if err != nil {
@@ -90,6 +109,18 @@ func main() {
 				fmt.Println("Keep-Alive received")
 				continue
 			}
+			if piecesReceving {
+				piece.Write(buff[:size])
+				if piece.Len() == 16*1024 {
+					fmt.Println("all bytes received")
+					// TODO: Do hash comparison
+					os.WriteFile(outFolder, piece.Bytes(), 0755)
+					return
+				} else {
+					// fmt.Println("PB")
+				}
+				continue
+			}
 			messageId := message(buff[4])
 			switch messageId {
 			case Choke:
@@ -97,18 +128,39 @@ func main() {
 				client.Unchocked = false
 			case Piece:
 				fmt.Println("Piece recived")
+				// TODO: Validate Piece metadata
+				piece.Write(buff[13:])
 				fmt.Println(buff[:size], "PBUFF")
+				piecesReceving = true
 			case Unchoke:
 				fmt.Println("I am unchocked")
 				client.Unchocked = true
-
+				payloadData := []byte{}
+				payloadData = append(payloadData, byte(Request))
+				pieceIndexBytes := make([]byte, 4)
+				piecieOffsetBytes := make([]byte, 4)
+				binary.BigEndian.PutUint32(pieceIndexBytes, uint32(piceIndex))
+				binary.BigEndian.PutUint32(piecieOffsetBytes, uint32(piceIndex)*16*1024)
+				payloadData = append(payloadData, pieceIndexBytes...)
+				payloadData = append(payloadData, piecieOffsetBytes...)
+				payloadLenghtBytes := make([]byte, 4)
+				binary.BigEndian.PutUint32(payloadLenghtBytes, uint32(len(payloadData)))
+				pieceLengthBytes := make([]byte, 4)
+				binary.BigEndian.PutUint32(pieceLengthBytes, 16*1024)
+				payloadData = append(payloadData, pieceLengthBytes...)
 				// uintBytes := make([]byte, 8)
 
-				// Request, Index, Offset
+				// Request, Index, Offset, Length
 				// payload := []byte{6, 0x0, 0x0, 0x40, 0x00}
 				// payload = []byte{0, 0, 0, byte(len(payload)), byte(Request), 0x0, 0x0, 0x40, 0x00}
 				// binary.BigEndian.PutUint32(lenghBytes, uint32(len(payload)))
-				conn.Write([]byte{0x00, 0x00, 0x00, 0x0D, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00})
+				payload := []byte{}
+				payload = append(payload, payloadLenghtBytes...)
+				payload = append(payload, payloadData...)
+				fmt.Println(payload)
+				conn.Write(payload)
+				// conn.Write([]byte{0x00, 0x00, 0x00, 0x0D, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00})
+
 			default:
 				fmt.Println("Unhandled response", messageId)
 			}

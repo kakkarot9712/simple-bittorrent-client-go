@@ -53,7 +53,7 @@ func (c *Client) ConnectToPeer() {
 			continue
 		}
 		msg := buff
-		if bytes.HasPrefix(msg[:19], []byte{19, 66, 105, 116, 84, 111, 114, 114, 101, 110, 116, 32, 112, 114, 111, 116, 111, 99, 111, 108}) {
+		if bytes.HasPrefix(msg, []byte{19, 66, 105, 116, 84, 111, 114, 114, 101, 110, 116, 32, 112, 114, 111, 116, 111, 99, 111, 108}) {
 			fmt.Println("Connection is Valid")
 			continue
 		}
@@ -77,5 +77,49 @@ func (c *Client) ConnectToPeer() {
 		}
 		// buff = make([]byte, 512)
 		// buff.Reset()
+	}
+}
+
+func (c *Client) GetBlocksPerPieces() (int, int) {
+	fullPiecesNum := c.Torrent.Info.PieceLength / uint(BLOCK_SIZE)
+	lastBlockLength := c.Torrent.Info.PieceLength % uint(BLOCK_SIZE)
+	if lastBlockLength > 0 {
+		return int(fullPiecesNum) + 1, int(lastBlockLength)
+	}
+	return int(fullPiecesNum), int(lastBlockLength)
+}
+
+func (client *Client) DownloadPiece() {
+	numPieces, lastPieceLength := client.GetBlocksPerPieces()
+	for i := 0; i <= numPieces; i++ {
+		payloadData := []byte{}
+		payloadData = append(payloadData, byte(Request))
+		pieceIndexBytes := make([]byte, 4)
+		piecieOffsetBytes := make([]byte, 4)
+		payloadLenghtBytes := make([]byte, 4)
+		pieceLengthBytes := make([]byte, 4)
+		binary.BigEndian.PutUint32(pieceIndexBytes, uint32(i))
+		if i == numPieces {
+			// Last Piece
+			binary.BigEndian.PutUint32(pieceLengthBytes, uint32(lastPieceLength))
+		} else {
+			binary.BigEndian.PutUint32(pieceLengthBytes, BLOCK_SIZE)
+		}
+		binary.BigEndian.PutUint32(piecieOffsetBytes, uint32(i)*BLOCK_SIZE)
+		payloadData = append(payloadData, pieceIndexBytes...)
+		payloadData = append(payloadData, piecieOffsetBytes...)
+		binary.BigEndian.PutUint32(payloadLenghtBytes, uint32(len(payloadData)))
+		payloadData = append(payloadData, pieceLengthBytes...)
+		// uintBytes := make([]byte, 8)
+
+		// Request, Index, Offset, Length
+		// payload := []byte{6, 0x0, 0x0, 0x40, 0x00}
+		// payload = []byte{0, 0, 0, byte(len(payload)), byte(Request), 0x0, 0x0, 0x40, 0x00}
+		// binary.BigEndian.PutUint32(lenghBytes, uint32(len(payload)))
+		payload := []byte{}
+		payload = append(payload, payloadLenghtBytes...)
+		payload = append(payload, payloadData...)
+		fmt.Println(payload)
+		client.conn.Write(payload)
 	}
 }
