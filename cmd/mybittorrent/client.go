@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"time"
 )
 
@@ -80,46 +83,132 @@ func (c *Client) ConnectToPeer() {
 	}
 }
 
-func (c *Client) GetBlocksPerPieces() (int, int) {
+func (c *Client) GetBlocksPerPieces() int {
 	fullPiecesNum := c.Torrent.Info.PieceLength / uint(BLOCK_SIZE)
-	lastBlockLength := c.Torrent.Info.PieceLength % uint(BLOCK_SIZE)
-	if lastBlockLength > 0 {
-		return int(fullPiecesNum) + 1, int(lastBlockLength)
-	}
-	return int(fullPiecesNum), int(lastBlockLength)
+	// lastBlockLength := c.Torrent.Info.PieceLength % uint(BLOCK_SIZE)
+	return int(fullPiecesNum)
 }
 
-func (client *Client) DownloadPiece() {
-	numPieces, lastPieceLength := client.GetBlocksPerPieces()
-	for i := 0; i <= numPieces; i++ {
-		payloadData := []byte{}
-		payloadData = append(payloadData, byte(Request))
-		pieceIndexBytes := make([]byte, 4)
-		piecieOffsetBytes := make([]byte, 4)
-		payloadLenghtBytes := make([]byte, 4)
-		pieceLengthBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(pieceIndexBytes, uint32(i))
-		if i == numPieces {
-			// Last Piece
-			binary.BigEndian.PutUint32(pieceLengthBytes, uint32(lastPieceLength))
-		} else {
-			binary.BigEndian.PutUint32(pieceLengthBytes, BLOCK_SIZE)
-		}
-		binary.BigEndian.PutUint32(piecieOffsetBytes, uint32(i)*BLOCK_SIZE)
-		payloadData = append(payloadData, pieceIndexBytes...)
-		payloadData = append(payloadData, piecieOffsetBytes...)
-		binary.BigEndian.PutUint32(payloadLenghtBytes, uint32(len(payloadData)))
-		payloadData = append(payloadData, pieceLengthBytes...)
-		// uintBytes := make([]byte, 8)
-
-		// Request, Index, Offset, Length
-		// payload := []byte{6, 0x0, 0x0, 0x40, 0x00}
-		// payload = []byte{0, 0, 0, byte(len(payload)), byte(Request), 0x0, 0x0, 0x40, 0x00}
-		// binary.BigEndian.PutUint32(lenghBytes, uint32(len(payload)))
-		payload := []byte{}
-		payload = append(payload, payloadLenghtBytes...)
-		payload = append(payload, payloadData...)
-		fmt.Println(payload)
-		client.conn.Write(payload)
+func (client *Client) DownloadPiece(pieceIndex int, outDir string) bool {
+	conn := client.conn
+	activeDownloads := 0
+	numBlocks := client.GetBlocksPerPieces()
+	fileLength := client.Torrent.Info.Length
+	numPieces := fileLength / client.Torrent.Info.PieceLength
+	lastPieceLength := fileLength % client.Torrent.Info.PieceLength
+	if lastPieceLength != 0 {
+		numPieces++
 	}
+	lastBlockLength := 0
+	if pieceIndex == int(numPieces)-1 {
+		numBlocks = int(lastPieceLength) / int(BLOCK_SIZE)
+		lastBlockLength = int(lastPieceLength) % int(BLOCK_SIZE)
+		if lastBlockLength != 0 {
+			numBlocks++
+		}
+	}
+	blockIndex := 0
+	pieceDownloaded := false
+	go func() {
+		buff := make([]byte, BLOCK_SIZE+1000)
+		var blockBuff bytes.Buffer
+		blocksReceived := 0
+		for {
+			size, err := conn.Read(buff)
+			if err != nil {
+				panic(err)
+			}
+			if size > 0 {
+				length := binary.BigEndian.Uint32(buff[:4])
+				if length == 0 {
+					fmt.Println("Keep-Alive received")
+					continue
+				}
+				messageId := message(buff[4])
+				switch messageId {
+				case Choke:
+					client.Unchocked = false
+					return
+				default:
+					blockBuff.Write(buff[:size])
+				}
+				if blockBuff.Len() >= (blocksReceived+1)*(int(BLOCK_SIZE)+13) {
+					activeDownloads--
+					blocksReceived++
+				}
+				totalLength := int(client.Torrent.Info.PieceLength) + (numBlocks * 13)
+				if lastPieceLength != 0 && pieceIndex == int(numPieces)-1 {
+					totalLength = int(lastPieceLength) + (numBlocks * 13)
+				}
+				if blockBuff.Len() == totalLength {
+					fmt.Println("ALL BLOCKS RECEIVED")
+					var fileBuff bytes.Buffer
+					file, err := os.OpenFile(outDir, os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
+					if err != nil {
+						panic(err)
+					}
+					defer file.Close()
+					for i := 0; i < numBlocks; i++ {
+						buff := make([]byte, BLOCK_SIZE+13)
+						n, err := blockBuff.Read(buff)
+						if err != nil {
+							panic(err)
+						}
+						fileBuff.Write(buff[13:n])
+					}
+					// Validate Piece by using hash
+					expectedHashHex := client.Torrent.GetPieceHashes()[pieceIndex]
+					actualHash := sha1.New()
+					actualHash.Write(fileBuff.Bytes())
+					actualHex := hex.EncodeToString(actualHash.Sum(nil))
+					if actualHex == expectedHashHex {
+						fmt.Println("Checksum Verified, writing piece to disk")
+						_, err = file.Write(fileBuff.Bytes())
+						if err != nil {
+							panic(err)
+						}
+					} else {
+						log.Panic("piece checksum validation failed! aborting")
+					}
+					pieceDownloaded = true
+					blockBuff.Reset()
+					return
+				}
+			}
+		}
+
+	}()
+	for !pieceDownloaded {
+		if activeDownloads < 4 && blockIndex < numBlocks {
+			payloadData := []byte{}
+			payloadData = append(payloadData, byte(Request))
+			// fmt.Println(numBlocks, numPieces, pieceIndex, lastPieceLength, lastBlockLength, blockIndex, "NP")
+			pieceIndexBytes := make([]byte, 4)
+			blockOffsetBytes := make([]byte, 4)
+			binary.BigEndian.PutUint32(pieceIndexBytes, uint32(pieceIndex))
+			binary.BigEndian.PutUint32(blockOffsetBytes, uint32(blockIndex)*BLOCK_SIZE)
+			payloadData = append(payloadData, pieceIndexBytes...)
+			payloadData = append(payloadData, blockOffsetBytes...)
+			payloadLenghtBytes := make([]byte, 4)
+			binary.BigEndian.PutUint32(payloadLenghtBytes, uint32(len(payloadData)))
+			blockLengthBytes := make([]byte, 4)
+			if blockIndex == numBlocks-1 && lastPieceLength != 0 && pieceIndex == int(numPieces)-1 {
+				// fmt.Println("LAST BLP", blockIndex, lastBlockLength)
+				binary.BigEndian.PutUint32(blockLengthBytes, uint32(lastBlockLength))
+			} else {
+				binary.BigEndian.PutUint32(blockLengthBytes, BLOCK_SIZE)
+			}
+			payloadData = append(payloadData, blockLengthBytes...)
+			payload := []byte{}
+			payload = append(payload, payloadLenghtBytes...)
+			payload = append(payload, payloadData...)
+			_, err := conn.Write(payload)
+			if err == nil {
+				// fmt.Println("req sent", blockIndex)
+				activeDownloads++
+				blockIndex++
+			}
+		}
+	}
+	return true
 }
