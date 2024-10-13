@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"slices"
 	"time"
 )
 
@@ -110,7 +111,7 @@ func (client *Client) DownloadPiece(pieceIndex int, outDir string) bool {
 	blockIndex := 0
 	pieceDownloaded := false
 	go func() {
-		buff := make([]byte, BLOCK_SIZE+1000)
+		buff := make([]byte, BLOCK_SIZE+14)
 		var blockBuff bytes.Buffer
 		blocksReceived := 0
 		for {
@@ -179,29 +180,23 @@ func (client *Client) DownloadPiece(pieceIndex int, outDir string) bool {
 
 	}()
 	for !pieceDownloaded {
-		if activeDownloads < 4 && blockIndex < numBlocks {
-			payloadData := []byte{}
-			payloadData = append(payloadData, byte(Request))
+		if activeDownloads < 5 && blockIndex < numBlocks {
+			// payloadData := []byte{}
+			var blockOffsetBytes, pieceIndexBytes, payloadLenghtBytes, blockLengthBytes []byte
+			blockOffsetBytes = make([]byte, 4)
 			// fmt.Println(numBlocks, numPieces, pieceIndex, lastPieceLength, lastBlockLength, blockIndex, "NP")
-			pieceIndexBytes := make([]byte, 4)
-			blockOffsetBytes := make([]byte, 4)
 			binary.BigEndian.PutUint32(pieceIndexBytes, uint32(pieceIndex))
 			binary.BigEndian.PutUint32(blockOffsetBytes, uint32(blockIndex)*BLOCK_SIZE)
-			payloadData = append(payloadData, pieceIndexBytes...)
-			payloadData = append(payloadData, blockOffsetBytes...)
-			payloadLenghtBytes := make([]byte, 4)
-			binary.BigEndian.PutUint32(payloadLenghtBytes, uint32(len(payloadData)))
-			blockLengthBytes := make([]byte, 4)
 			if blockIndex == numBlocks-1 && lastPieceLength != 0 && pieceIndex == int(numPieces)-1 {
 				// fmt.Println("LAST BLP", blockIndex, lastBlockLength)
 				binary.BigEndian.PutUint32(blockLengthBytes, uint32(lastBlockLength))
 			} else {
 				binary.BigEndian.PutUint32(blockLengthBytes, BLOCK_SIZE)
 			}
+			payloadData := slices.Concat([]byte{byte(Request)}, pieceIndexBytes, blockOffsetBytes)
+			binary.BigEndian.PutUint32(payloadLenghtBytes, uint32(len(payloadData)))
 			payloadData = append(payloadData, blockLengthBytes...)
-			payload := []byte{}
-			payload = append(payload, payloadLenghtBytes...)
-			payload = append(payload, payloadData...)
+			payload := slices.Concat(payloadLenghtBytes, payloadData)
 			_, err := conn.Write(payload)
 			if err == nil {
 				// fmt.Println("req sent", blockIndex)
